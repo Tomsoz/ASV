@@ -873,39 +873,69 @@ namespace SavegameToolkit
 
             Tribes.Clear();
 
-            if (TribeDataStore!=null && TribeDataStore.IndexChunks.Count > 0)
+            if (TribeDataStore != null && TribeDataStore.IndexChunks.Count > 0)
             {
-                for(int tribeFileIndex  = 0; tribeFileIndex < TribeDataStore.IndexChunks.Count; tribeFileIndex++)
+                var tribesToAdd = new ConcurrentBag<GameObject>();
+                var processingTasks = new List<Task>();
+
+                for (int tribeFileIndex = 0; tribeFileIndex < TribeDataStore.IndexChunks.Count; tribeFileIndex++)
                 {
+                    // Ensure we don't exceed array bounds
+                    if (tribeFileIndex >= StoredDataOffsets.Count)
+                    {
+                        break;
+                    }
+
                     long storedIndexOffset = StoredDataOffsets[tribeFileIndex].Item1 + TribeDataStore.IndexChunks[tribeFileIndex].ArchiveOffset;
                     long storedIndexSize = TribeDataStore.IndexChunks[tribeFileIndex].Size;
                     long storedDataOffset = StoredDataOffsets[tribeFileIndex].Item1 + TribeDataStore.DataChunks[tribeFileIndex].ArchiveOffset;
-                    
 
                     archive.Position = storedIndexOffset;
                     long indexLimit = storedIndexSize + storedIndexOffset;
 
-                    List<long> tribeOffsets = new List<long>();
-                    while(archive.Position < indexLimit)
+                    // Read all tribe offsets first
+                    var tribeOffsets = new List<long>();
+                    while (archive.Position < indexLimit)
                     {
                         long tribeId = archive.ReadLong();
                         long tribeOffset = archive.ReadLong();
                         long tribeSize = archive.ReadLong();
-                        
-                        long tribeDataOffset = storedDataOffset + tribeOffset;
-                        tribeOffsets.Add(tribeDataOffset);
+                        tribeOffsets.Add(storedDataOffset + tribeOffset);
                     }
 
-                    foreach(var tribeOffset in tribeOffsets)
+                    // Process each tribe in parallel
+                    foreach (var tribeOffset in tribeOffsets)
                     {
-                        archive.Position = tribeOffset;
-                        ArkStoreTribe storedTribe = new ArkStoreTribe();
-                        storedTribe.ReadBinary(archive, options);
-
-                        Tribes.AddRange(storedTribe.Objects);
+                        processingTasks.Add(Task.Run(() =>
+                        {
+                            try
+                            {
+                                lock (archive)
+                                {
+                                    archive.Position = tribeOffset;
+                                    var storedTribe = new ArkStoreTribe();
+                                    storedTribe.ReadBinary(archive, options);
+                                    foreach (var tribeObject in storedTribe.Objects)
+                                    {
+                                        tribesToAdd.Add(tribeObject);
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log error but continue processing
+                                Console.WriteLine($"Error processing tribe at offset {tribeOffset}: {ex.Message}");
+                            }
+                        }));
                     }
+
+                    // Wait for all tasks to complete before moving to next file
+                    Task.WaitAll(processingTasks.ToArray());
+                    processingTasks.Clear();
                 }
 
+                // Add all processed tribes at once
+                Tribes.AddRange(tribesToAdd);
             }
         }
 
@@ -915,65 +945,94 @@ namespace SavegameToolkit
 
             Profiles.Clear();
 
-            int lastStoredIndexWithData = StoredDataOffsets.Count-1;
-            while(lastStoredIndexWithData-- >= 0)
+            // Find the last valid stored index
+            int lastStoredIndexWithData = -1;
+            for (int i = 0; i < StoredDataOffsets.Count; i++)
             {
-                if (StoredDataOffsets[lastStoredIndexWithData].Item1 != archive.Limit)
+                if (StoredDataOffsets[i].Item1 != archive.Limit)
                 {
-                    break;
+                    lastStoredIndexWithData = i;
                 }
             }
-            
+
+            // If no valid index found, return early
+            if (lastStoredIndexWithData == -1)
+            {
+                return;
+            }
 
             if (PlayerDataStore != null && PlayerDataStore.IndexChunks.Count > 0)
             {
+                var profilesToAdd = new ConcurrentBag<GameObject>();
+                var processingTasks = new List<Task>();
+
                 for (int playerFileIndex = 0; playerFileIndex < PlayerDataStore.IndexChunks.Count; playerFileIndex++)
                 {
+                    // Ensure we don't exceed array bounds
+                    if (playerFileIndex >= StoredDataOffsets.Count)
+                    {
+                        break;
+                    }
 
                     long storedIndexOffset = StoredDataOffsets[lastStoredIndexWithData].Item1 + PlayerDataStore.IndexChunks[playerFileIndex].ArchiveOffset;
                     long storedIndexSize = PlayerDataStore.IndexChunks[playerFileIndex].Size;
                     long storedDataOffset = StoredDataOffsets[playerFileIndex].Item1 + PlayerDataStore.DataChunks[playerFileIndex].ArchiveOffset;
 
-
                     archive.Position = storedIndexOffset;
                     long indexLimit = storedIndexSize + storedIndexOffset;
 
-                    List<Tuple<long,long>> playerOffsets = new List<Tuple<long, long>>();
+                    // Read all player offsets first
+                    var playerOffsets = new List<Tuple<long, long>>();
                     while (archive.Position < indexLimit)
                     {
                         long playerId = archive.ReadLong();
                         long playerOffset = archive.ReadLong();
                         long playerSize = archive.ReadLong();
-
-                        long playerDataOffset = storedDataOffset + playerOffset;
-                        playerOffsets.Add(new Tuple<long,long>(playerId, playerDataOffset));
-                        
+                        playerOffsets.Add(new Tuple<long, long>(playerId, storedDataOffset + playerOffset));
                     }
 
+                    // Process each player profile in parallel
                     foreach (var playerOffset in playerOffsets)
                     {
-                        archive.Position = playerOffset.Item2;
-                        ArkStoreProfile storedProfile = new ArkStoreProfile();
-                        storedProfile.ReadBinary(archive, options);
-
-                        if (!storedProfile.Profile.HasAnyProperty("MyData")) continue;
-
-                        var playerData = (StructPropertyList)storedProfile.Profile.GetTypedProperty<PropertyStruct>("MyData").Value;
-                        var lastLoginTime = playerData.GetPropertyValue<double>("LastLoginTime");
-                        DateTime lastLoginTimestamp = GetApproxDateTimeOf(FileTime, lastLoginTime) ?? DateTime.Now;
-
-
-                        var dayDifference = (int)FileTime.Subtract(lastLoginTimestamp).Days;
-                        if (dayDifference <= options.StoredProfileLastLoggedInDayFilter)
+                        processingTasks.Add(Task.Run(() =>
                         {
-                            storedProfile.Profile.Properties.Add(new PropertyInt64("ProfileFilename", playerOffset.Item1));
+                            try
+                            {
+                                lock (archive)
+                                {
+                                    archive.Position = playerOffset.Item2;
+                                    var storedProfile = new ArkStoreProfile();
+                                    storedProfile.ReadBinary(archive, options);
 
-                            //only include those logged in within last 30 days of save
-                            Profiles.Add(storedProfile.Profile);
-                        }
-                        
+                                    if (!storedProfile.Profile.HasAnyProperty("MyData")) return;
+
+                                    var playerData = (StructPropertyList)storedProfile.Profile.GetTypedProperty<PropertyStruct>("MyData").Value;
+                                    var lastLoginTime = playerData.GetPropertyValue<double>("LastLoginTime");
+                                    DateTime lastLoginTimestamp = GetApproxDateTimeOf(FileTime, lastLoginTime) ?? DateTime.Now;
+
+                                    var dayDifference = (int)FileTime.Subtract(lastLoginTimestamp).Days;
+                                    if (dayDifference <= options.StoredProfileLastLoggedInDayFilter)
+                                    {
+                                        storedProfile.Profile.Properties.Add(new PropertyInt64("ProfileFilename", playerOffset.Item1));
+                                        profilesToAdd.Add(storedProfile.Profile);
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log error but continue processing
+                                Console.WriteLine($"Error processing profile at offset {playerOffset.Item2}: {ex.Message}");
+                            }
+                        }));
                     }
+
+                    // Wait for all tasks to complete before moving to next file
+                    Task.WaitAll(processingTasks.ToArray());
+                    processingTasks.Clear();
                 }
+
+                // Add all processed profiles at once
+                Profiles.AddRange(profilesToAdd);
             }
         }
 
