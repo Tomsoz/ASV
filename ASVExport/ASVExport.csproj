@@ -2,20 +2,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <OutputType>Library</OutputType>
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <StartupObject>ASVExport.Program</StartupObject>
     <AssemblyVersion>5.1.1.0</AssemblyVersion>
     <FileVersion>5.1.1.0</FileVersion>
     <BaseOutputPath>c:\temp\ASV\</BaseOutputPath>
-    <ApplicationIcon>asvexporticon.ico</ApplicationIcon>
   </PropertyGroup>
-
-  <ItemGroup>
-    <Content Include="asvexporticon.ico" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
