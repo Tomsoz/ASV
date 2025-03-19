@@ -776,7 +776,7 @@ namespace ASVPack.Models
                                 IsSolo = true,
                                 HasGameFile = false,
                                 TribeId = p.Id,
-                                TribeName = $"Tribe of {p.CharacterName}"
+                                TribeName = $"Tribe of {p.CharacterName} (b0150834-8c43-4228-b831-9e20bd450af8)"
                             };
 
                             fileTribes.Add(playerTribe);
@@ -816,7 +816,7 @@ namespace ASVPack.Models
                                 IsSolo = true,
                                 HasGameFile = false,
                                 TribeId = p.Id,
-                                TribeName = $"Tribe of {p.CharacterName}"
+                                TribeName = $"Tribe of {p.CharacterName} (b0150834-8c43-4228-b831-9e20bd450af8)"
                             };
                             playerTribe.Members.Add((int)p.Id, p.CharacterName);
                             playerTribe.Players.Add(p);
@@ -1992,7 +1992,7 @@ namespace ASVPack.Models
                         IsSolo = true,
                         HasGameFile = false,
                         TribeId = p.Id,
-                        TribeName = $"Tribe of {p.CharacterName}"
+                        TribeName = $"Tribe of {p.CharacterName} (b0150834-8c43-4228-b831-9e20bd450af8)"
                     };
 
                     fileTribes.Add(playerTribe);
